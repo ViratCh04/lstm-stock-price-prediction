@@ -17,13 +17,14 @@ def main():
     print(df.head())
 
     # data visualization
-    plt.figure(figsize = (18, 9))
+    """
+    plt.figure(figsize = (18, 9), num="Data Visualisation")
     plt.plot(range(df.shape[0]), (df['Low'] + df['High'])/2.0)
     plt.xticks(range(0, df.shape[0], 500), df['Date'].loc[::500], rotation=45)
     plt.xlabel('Date', fontsize=18)
     plt.ylabel('Mid Price', fontsize=18)
     plt.show()
-    
+    """
     # Splitting data into training and test sets
     highPrices = df.loc[:, 'High'].to_numpy()
     # AttributeError: 'Series' object has no attribute 'as_matrix'
@@ -90,7 +91,8 @@ def main():
         stdAvgX.append(date)
     print('MSE error for standard averaging: %.5f'%(0.5 * np.mean(mseErrors)))
     # Plotting averaged graph alongside the actual stock graph for qualitative inspection
-    plt.figure(figsize = (18, 9))
+    plt.figure(figsize = (10, 5), num="Standard Average Predictions")
+    #plt.get_current_fig_manager().full_screen_toggle()
     plt.plot(range(df.shape[0]), allMidData, color = 'b', label='True')
     plt.plot(range(windowSize, N), stdAvgPredictions, color='orange', label='Prediction')
     #plt.xticks(range(0, df.shape[0], 50), df['Date'].loc[::50], rotation=45)
@@ -102,7 +104,33 @@ def main():
     # Exponential moving average
     # This is better than standard avg since it responds to recent market trends by focusing on recent data points
     # https://www.investopedia.com/terms/e/ema.asp
-    
+    windowSize = 100
+    N = trainingData.size
+
+    runAvgPredictions = []
+    runAvgX = []
+    mseErrors = []
+    emaToday = 0.0
+    runAvgPredictions.append(emaToday)
+    decay = 0.5
+
+    for predIdx in range(1, N):
+        emaToday = emaToday * decay + (1.0 - decay) * trainingData[predIdx - 1]
+        runAvgPredictions.append(emaToday)
+        mseErrors.append((runAvgPredictions[-1] - trainingData[predIdx]) ** 2)
+        runAvgX.append(date)
+    print("MSE error for EMA Averaging: %.5f"%(0.5 * np.mean(mseErrors)))
+
+    # Visualising for comparison
+    plt.figure(figsize = (10, 5), num="EMA Predictions vs True Values")
+    #plt.get_current_fig_manager().full_screen_toggle()
+    plt.plot(range(df.shape[0]), allMidData, color='b', label="True")
+    plt.plot(range(0, N), runAvgPredictions, color="orange", label="Predictions")
+    plt.xlabel("Date")
+    plt.ylabel("Mid Price")
+    plt.legend(fontsize=18)
+    plt.show()
+
 
 if __name__ == "__main__":
     main()
