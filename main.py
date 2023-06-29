@@ -8,6 +8,9 @@ import numpy as np
 import tensorflow as tf
 from sklearn.preprocessing import MinMaxScaler
 
+tf.compat.v1.disable_eager_execution()
+# tf.compat.v1.disable_v2_behavior()
+
 def main():
     df = pd.read_csv(os.path.join('Stocks', 'hpq.us.txt'), delimiter=',', usecols=['Date','Open','High','Low','Close'])
     print("Success")
@@ -90,6 +93,7 @@ def main():
         mseErrors.append((stdAvgPredictions[-1] - trainingData[predIdx]) ** 2)
         stdAvgX.append(date)
     print('MSE error for standard averaging: %.5f'%(0.5 * np.mean(mseErrors)))
+    """
     # Plotting averaged graph alongside the actual stock graph for qualitative inspection
     plt.figure(figsize = (10, 5), num="Standard Average Predictions")
     #plt.get_current_fig_manager().full_screen_toggle()
@@ -100,7 +104,7 @@ def main():
     plt.ylabel('Mid Price')
     plt.legend(fontsize=18)
     plt.show()
-
+    """
     # Exponential moving average
     # This is better than standard avg since it responds to recent market trends by focusing on recent data points
     # https://www.investopedia.com/terms/e/ema.asp
@@ -120,7 +124,7 @@ def main():
         mseErrors.append((runAvgPredictions[-1] - trainingData[predIdx]) ** 2)
         runAvgX.append(date)
     print("MSE error for EMA Averaging: %.5f"%(0.5 * np.mean(mseErrors)))
-
+    """
     # Visualising for comparison
     plt.figure(figsize = (10, 5), num="EMA Predictions vs True Values")
     #plt.get_current_fig_manager().full_screen_toggle()
@@ -130,6 +134,117 @@ def main():
     plt.ylabel("Mid Price")
     plt.legend(fontsize=18)
     plt.show()
+    """
+    # Implementing a data generator to train data as it feeds data to model in real-time
+
+    class DataGeneratorSeq(object):
+
+        def __init__(self, prices, batchsize, numUnroll):
+            self._prices = prices
+            self._pricesLength = len(self._prices) - numUnroll
+            self._batchsize = batchsize
+            self._numUnroll = numUnroll
+            self._segments = self._pricesLength // self._batchsize
+            self._cursor = [offset * self._segments for offset in range(self._batchsize)]
+
+        def nextBatch(self):
+            batchData = np.zeros((self._batchsize), dtype=np.float32)
+            batchLabels = np.zeros((self._batchsize), dtype=np.float32)
+
+            for b in range(self._batchsize):
+                if self._cursor[b] + 1 >= self._pricesLength:
+                    #self._cursor[b] = b * self._segments
+                    self._cursor[b] = np.random.randint(0, (b+1) * self._segments)
+
+                batchData[b] = self._prices[self._cursor[b]]
+                batchLabels[b] = self._prices[self._cursor[b] + np.random.randint(0,5)]
+
+                self._cursor[b] = (self._cursor[b] + 1) % self._pricesLength
+
+            return batchData, batchLabels
+        
+        def unrollBatches(self):
+            unrollData, unrollLabels = [], []
+            init_data, init_label = None, None
+            for ui in range(self._numUnroll):
+                data, labels = self.nextBatch()
+
+                unrollData.append(data)
+                unrollLabels.append(labels)
+
+            return unrollData, unrollLabels
+        
+        def resetIndices(self):
+            for b in range(self._batchsize):
+                self._cursor[b] = np.random.randint(0, min((b+1)*self._segments, self._pricesLength - 1))
+
+    dg = DataGeneratorSeq(trainingData, 5, 5)
+    uData, uLabels = dg.unrollBatches()
+    
+    for ui,(dat, lbl) in enumerate(zip(uData, uLabels)):
+        print('\n\nUnrolled Indexx %d'%ui)
+        datInd = dat
+        lblInd = lbl
+        print('\tInputs: ', dat)
+        print('\n\tOutput: ', lbl)
+
+    # Defining hyperparameters
+    D = 1 # dimensionality of data, data is 1D for now
+    numUnrollings = 55 # Number of time steps you look into the future
+    batchSize = 500 # number of samples in a batch
+    numNodes = [200, 200, 150] # Number of hidden nodes/neurons in each layer of deep LSTM
+    nLayers = len(numNodes) # number of layers
+    dropout = 0.2
+
+    tf.compat.v1.reset_default_graph() # important for a model to run multiple times
+
+    # Defining placeholders for training inputs and labels
+    trainInputs, trainOutputs = [], []
+
+    # You unroll the input over time defining placeholders for each time step
+    for ui in range(numUnrollings):
+        trainInputs.append(tf.compat.v1.placeholder(tf.float32, shape=[batchSize, D], name='train_inputs_%d'%ui))
+        trainOutputs.append(tf.compat.v1.placeholder(tf.float32, shape=[batchSize, 1], name='train_outputs_%d'%ui))
+
+    # Defining parameters for LSTM and regression layer
+    # using MultiRNNCell in TF to encapsulate the three LSTMCell objects
+    # Creating dropout implemented LSTM cells as they improve performance and reduce overfitting
+    lstmCells = [
+        tf.keras.layers.LSTMCell(units=numNodes[li])
+        for li in range(nLayers)]
+    dropLstmCells = [tf.compat.v1.nn.rnn_cell.DropoutWrapper(
+        lstm, input_keep_prob = 1.0, output_keep_prob = 1.0 - dropout, state_keep_prob = 1.0 - dropout
+    ) for lstm in lstmCells]
+    dropMultiCell = tf.compat.v1.nn.rnn_cell.MultiRNNCell(dropLstmCells)
+    multiCell = tf.compat.v1.nn.rnn_cell.MultiRNNCell(lstmCells)
+
+    # w and b denote the layers of LSTMs and linear regression layer
+    w = tf.compat.v1.get_variable('w', shape = [numNodes[-1], 1], initializer = tf.keras.initializers.GlorotUniform())
+    b = tf.compat.v1.get_variable('b', initializer = tf.random.uniform([1], -0.1, 0.1))
+
+    # create cell state and hidden state variables to maintain the state of LSTM
+    c , h = [], []
+    initialState = []
+    for li in range(nLayers):
+        c.append(tf.Variable(tf.zeros([batchSize, numNodes[li]]), trainable = False))
+        h.append(tf.Variable(tf.zeros([batchSize, numNodes[li]]), trainable = False))
+        initialState.append(tf.compat.v1.nn.rnn_cell.LSTMStateTuple(c[li], h[li]))
+
+    # Do several tensor transformations, because the function dynamic_rnn takes a specific input format
+    # Note to self to check out https://www.tensorflow.org/api_docs/python/tf/keras/layers/RNN
+    allInputs = tf.concat([tf.expand_dims(t, 0) for t in trainInputs], axis = 0)
+
+    # allOutputs is [seqLength, batchSize, numNodes]
+    allLstmOutputs, state = tf.keras.layers.RNN(
+        dropMultiCell, allInputs, initial_state = tuple(initialState),
+        timeMajor = True, dtype = tf.float32)
+    
+    allLstmOutputs = tf.reshape(allLstmOutputs, [batchSize * numUnrollings, numNodes[-1]])
+
+    allOutputs = tf.compat.v1.nn.xw_plus_b(allLstmOutputs, w, b)
+
+    splitOutputs = tf.split(allOutputs, numUnrollings, axis = 0)
+
 
 
 if __name__ == "__main__":
