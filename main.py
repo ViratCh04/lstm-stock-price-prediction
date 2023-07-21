@@ -8,6 +8,8 @@ import numpy as np
 import tensorflow as tf
 from sklearn.preprocessing import MinMaxScaler
 
+# TODO: Migrate the entire program to TF 2.x without causing unfixable errors.
+
 tf.compat.v1.disable_eager_execution()
 # tf.compat.v1.disable_v2_behavior()
 
@@ -30,20 +32,17 @@ def main():
     """
     # Splitting data into training and test sets
     highPrices = df.loc[:, 'High'].to_numpy()
-    # AttributeError: 'Series' object has no attribute 'as_matrix'
     lowPrices = df.loc[:, 'Low'].to_numpy()
     midPrices = (highPrices + lowPrices) / 2.0
     trainingData = midPrices[:11000]
     testData = midPrices[11000:]
 
     # Scaling the data to be between 0 and 1
-    # Normalize both test and train data wrt train data as you are not supposed to have access to test data
-    scaler = MinMaxScaler()
     trainingData = trainingData.reshape(-1, 1)
     testData = testData.reshape(-1, 1)
 
-    # Train scaler with training data and smooth data by
-    # splitting data into 5 windows (2500 data points each)
+    # Train scaler with training data and smooth data by splitting data into 5 windows (2500 data points each)
+    scaler = MinMaxScaler()
     smoothingWindowSize = 2500
     for di in range(0, 10000, smoothingWindowSize):
         scaler.fit(trainingData[di:di+smoothingWindowSize, :])
@@ -57,7 +56,7 @@ def main():
     # -1 parameter converts the 2d array into 1d array automatically to assist my laziness
     trainingData = trainingData.reshape(-1)
 
-    # normalize test data
+    # normalize 1-D test data
     testData = scaler.transform(testData).reshape(-1)
 
     # Smoothing the training data by
@@ -89,7 +88,7 @@ def main():
             date = dt.datetime.strptime(k, '%Y-%m-%d').date() + dt.timedelta(days=1)
         else:
             date = df.loc[predIdx, 'Date']
-        stdAvgPredictions.append(np.mean(trainingData[predIdx - windowSize:predIdx]))
+        stdAvgPredictions.append(np.mean(trainingData[predIdx - windowSize : predIdx]))
         mseErrors.append((stdAvgPredictions[-1] - trainingData[predIdx]) ** 2)
         stdAvgX.append(date)
     print('MSE error for standard averaging: %.5f'%(0.5 * np.mean(mseErrors)))
@@ -215,8 +214,10 @@ def main():
     dropLstmCells = [tf.compat.v1.nn.rnn_cell.DropoutWrapper(
         lstm, input_keep_prob = 1.0, output_keep_prob = 1.0 - dropout, state_keep_prob = 1.0 - dropout
     ) for lstm in lstmCells]
-    dropMultiCell = tf.compat.v1.nn.rnn_cell.MultiRNNCell(dropLstmCells)
-    multiCell = tf.compat.v1.nn.rnn_cell.MultiRNNCell(lstmCells)
+    #dropMultiCell = tf.compat.v1.nn.rnn_cell.MultiRNNCell(dropLstmCells)
+    dropMultiCell = tf.keras.layers.StackedRNNCells(dropLstmCells)
+    #multiCell = tf.compat.v1.nn.rnn_cell.MultiRNNCell(lstmCells)
+    multiCell = tf.keras.layers.StackedRNNCells(lstmCells)
 
     # w and b denote the layers of LSTMs and linear regression layer
     w = tf.compat.v1.get_variable('w', shape = [numNodes[-1], 1], initializer = tf.keras.initializers.GlorotUniform())
@@ -228,16 +229,16 @@ def main():
     for li in range(nLayers):
         c.append(tf.Variable(tf.zeros([batchSize, numNodes[li]]), trainable = False))
         h.append(tf.Variable(tf.zeros([batchSize, numNodes[li]]), trainable = False))
-        initialState.append(tf.compat.v1.nn.rnn_cell.LSTMStateTuple(c[li], h[li]))
+#        initialState.append(tf.compat.v1.nn.rnn_cell.LSTMStateTuple(c[li], h[li]))
 
     # Do several tensor transformations, because the function dynamic_rnn takes a specific input format
     # Note to self to check out https://www.tensorflow.org/api_docs/python/tf/keras/layers/RNN
     allInputs = tf.concat([tf.expand_dims(t, 0) for t in trainInputs], axis = 0)
 
     # allOutputs is [seqLength, batchSize, numNodes]
-    allLstmOutputs, state = tf.keras.layers.RNN(
-        dropMultiCell, allInputs, initial_state = tuple(initialState),
-        timeMajor = True, dtype = tf.float32)
+    allLstmOutputs = tf.keras.layers.RNN(
+        dropMultiCell, return_sequences = True,
+        return_state = True, time_major = True)
     
     allLstmOutputs = tf.reshape(allLstmOutputs, [batchSize * numUnrollings, numNodes[-1]])
 
